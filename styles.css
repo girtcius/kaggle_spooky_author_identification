@@ -1,0 +1,16 @@
+/* Whole document: */
+body{
+  font-family: "Times New Roman";
+  font-size: 12pt;
+}
+/* Headers */
+h1,h2,h3,h4,h5,h6{
+  font-size: 14pt;
+  font-weight: bold;
+}
+/* Main text */
+p{
+  text-align: justify;
+  text-indent: 1cm;
+  line-height: 150%;
+}

@@ -1,0 +1,651 @@
+---
+title: "Spooky Author Identification"
+author: |
+  | Eugene Girtcius
+  | Transport and Telecommunication Institute
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    css: styles.css
+    df_print: kable
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 9
+    highlight: tango
+    mathjax: default
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+  # word_document:
+  #   toc: yes
+  #   toc_depth: '2'
+  # pdf_document:
+  #   dev: cairo_pdf
+  #   df_print: kable
+  #   fig_caption: yes
+  #   fig_height: 6
+  #   fig_width: 9
+  #   highlight: tango
+  #   includes:
+  #     in_header: preamble-latex.tex
+  #   keep_tex: yes
+  #   latex_engine: xelatex
+  #   number_sections: yes
+  #   toc: yes
+fontsize: 12pt
+geometry: left=3cm, right=3cm, top=3cm, bottom=3cm
+header-includes:
+- \usepackage{longtable}
+- \usepackage{natbib}
+- \setcitestyle{square,numbers,super}
+- \usepackage{amsmath}
+# mainfont: TimesNewRomanPSMT
+linkcolor: blue
+documentclass: article
+citecolor: blue
+urlcolor: blue
+---
+
+<script type="text/x-mathjax-config">
+MathJax.Hub.Config({
+  TeX: {
+      equationNumbers: {
+            autoNumber: "all",
+            <!-- formatNumber: function (n) {return '9.'+n} -->
+      }
+  }
+});
+</script>
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error=FALSE)
+# options(knitr.table.format = "latex", booktabs = T)
+```
+
+# Введение
+
+[Spooky Author Identification](https://www.kaggle.com/c/spooky-author-identification/)
+
+Целью исследования является попытка предсказать автора по короткому отрывку из написанного им текста методами ML. В данных присутствуют 3 автора: Г.Ф. Лавкрафт (HPL), Э.А. По (EAP) и М.В. Шелли (MWS)
+
+ЗАДАЧИ:
+
+ * Проведение EDA
+ * Выявление значимых признаков для классификации
+ * Построение нескольких моделей для сопоставления результатов
+ * Выбор Квазиоптимальной модели (или ансамбля)
+ * Попадание в ТОП 20% в рейтинге Kaggle
+ * Освоение инструментов для дипломной работы
+
+В качестве основных подходов в работе будет рассмотрен *XGBoost*, нейронные сети(*LSTM*, *FastText*, *BERT*) и *наивный байесовский классификатор*. Для написания кода будет использоваться язык **R**.
+
+С исходными данными можно ознакомиться [здесь](https://www.kaggle.com/c/spooky-author-identification/data). Данные представлены в виде тренировочного (`../input/train.csv`) и тестового набора  (`../input/test.csv`). Каждое наблюдение содержит короткий фрагмент текста (Как правило, предложение). Также представлен образец данных в формате, необходимой для загрузки в Kaggle
+
+# Подготовка {.tabset .tabset-fade .tabset-pills}
+
+## Загрузка библиотек
+
+В работе использовались классические библиотеки машинного обучения: *keras*, *caret*, *xgboost*. Для разметки и манипуляций с текстом выбраны *tidytext*, *RDRPOSTagger*, *tm*, *wordcloud*. Визуализация проводилась через *ggplot*, обработка данных средствами *tidyverse*. Полный список библиотек приведен ниже.
+
+```{r, message = F}
+# general visualisation
+library('ggplot2') # visualisation
+library('scales') # visualisation
+library('grid') # visualisation
+library('gridExtra') # visualisation
+library('RColorBrewer') # visualisation
+library('corrplot') # visualisation
+
+# general data manipulation
+library('dplyr') # data manipulation
+library('readr') # input/output
+library('data.table') # data manipulation
+library('tibble') # data wrangling
+library('tidyr') # data wrangling
+library('stringr') # string manipulation
+library('forcats') # factor manipulation
+
+# specific visualisation
+library('alluvial') # visualisation
+library('ggrepel') # visualisation
+library('ggridges') # visualisation
+library('gganimate') # visualisation
+library('ggExtra') # visualisation
+
+# specific data manipulation
+library('lazyeval') # data wrangling
+library('broom') # data wrangling
+library('purrr') # string manipulation
+library('reshape2') # data wrangling
+
+# Text / NLP
+library('tidytext') # text analysis
+library('tm') # text analysis
+library('SnowballC') # text analysis
+library('topicmodels') # text analysis
+library('wordcloud') # test visualisation
+library('igraph') # visualisation
+library('ggraph') # visualisation
+library('babynames') # names
+
+# Models
+library('Matrix')
+library('xgboost')
+library('caret')
+
+library('treemapify') #visualisation
+
+require(tidyverse)
+require(tidytext)
+require(textstem)
+require(qdap)
+require(caret)
+require(widyr)
+require(broom)
+require(keras)
+require(gridExtra)
+require(plotly)
+require(scales)
+require(ggcorrplot)
+require(RDRPOSTagger)
+require(parallel)
+require(gmodels)
+require(knitr)
+# require(plotly)
+# require(kableExtra)
+```
+
+## загрузка данных
+
+```{r warning=FALSE, results=FALSE, message = FALSE}
+train <- read_csv('data/train.csv')
+test <- read_csv('data/test.csv')
+sample <- read.csv('data/sample_submission.csv')
+```
+
+# Анализ и визуализация данных
+
+## Структура данных {.tabset .tabset-fade .tabset-pills}
+
+Набор данных содержит 3 колонки, id, непосредственно текст и метку автора. В тренировочных данных 19579 наблюдений. Встречаются, как короткие, так и длинные отрывки. Приведенный отрывок максимальной длины похож на ошибку в разметке. Точки между предложенриями отсутствуют и данные попали в один отрывок. Возможно, это следует считать выбросом. В тестовых данных 8392 наблюдений и отсутствуют метки классов. Также присутствуют длинные отрывки с отсутствующими точками. Пропушенных данных в наблюдениях не обнаружено.
+
+### Тренировочные данные
+
+Первые 5 наблюдений
+
+```{r, cache = T}
+train %>%
+    slice(1:5)
+```
+
+```{r, cache = T}
+glimpse(train)
+```
+
+```{r, cache = T}
+summary(train)
+```
+
+Отрывок максимальной длины
+
+```{r, cache = T}
+train %>%
+    slice(which.max(nchar(text)))
+```
+
+Отрывок минимальной длины
+
+```{r, cache = T}
+train %>%
+    slice(which.min(nchar(text)))
+```
+
+Пропущенные значения
+
+```{r, cache = T}
+colSums(is.na(train))
+```
+
+### Тестовые данные
+
+Первые 5 наблюдений
+ 
+```{r, cache = T}
+test %>%
+    slice(1:5)
+```
+
+```{r, cache = T}
+glimpse(test)
+```
+
+```{r, cache = T}
+summary(test)
+```
+
+Отрывок максимальной длины
+
+```{r, cache = T}
+test %>%
+    slice(which.max(nchar(text)))
+```
+
+Отрывок минимальной длины
+
+```{r, cache = T}
+test %>%
+    slice(which.min(nchar(text)))
+```
+
+Пропущенные значения
+
+```{r, cache = T}
+colSums(is.na(test))
+```
+
+## Пропорции
+
+Тексты По занимают 40%, Шелли 31%, Лавкрафта 29%. Длина предложений у По немного короче, чем у остальных.
+
+```{r, cache = T}
+table(train$author) %>%
+    prop.table()
+```
+
+```{r, cache = T}
+train %>% 
+    group_by(author) %>%
+    summarise(n = n()) %>% 
+    ggplot(data = ., aes(x = author, y = n, fill = author)) +
+    geom_col(show.legend = F) +
+    xlab(label = 'author') +
+    ylab(label = 'number of texts') +
+    theme_bw()
+```
+
+```{r, cache = T}
+
+train %>% 
+    mutate(len = nchar(text)) %>% 
+    ggplot(data = ., aes(x = len, fill = author)) +
+    geom_histogram(binwidth = 50) +
+    facet_grid(. ~ author) +
+    xlab(label = 'number of characters') +
+    ylab(label = 'number of texts') +
+    theme_bw()
+
+```
+
+Медиана выглядит предпочтительнее среднего, вследствие ряда длинных отрывков с пропущеннными точками.
+
+```{r, cache = T}
+train %>% 
+    mutate(len = nchar(text)) %>% 
+    group_by(author) %>% 
+    summarise(`median text length` = median(len), `mean text length` = mean(len))
+```
+
+## Облака слов {.tabset .tabset-fade .tabset-pills}
+
+Облако слов, - удобное представление наиболее часто встречаюшихся слов в тексте. Размер отражает частоту встречаемости. Для начала применим облако к тексту в целом.
+
+```{r, cache = T}
+train %>%
+    unnest_tokens(word, text) %>% 
+    count(word) %>% 
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1.5), random.order = FALSE, rot.per = 0, color = 'black'))
+```
+
+Ожидаемо, вспомогательные части речи, - союзы, артикли, местоимения etc в тексте встречаются чаще. Стоит ли от них избавляться при построении модели? Важность признаков будет рассмотрена позже, на этапе feature engineering. Ниже представлен вариант облака без учета вспомогательных слов.
+
+```{r, cache = T}
+train_clean <- train %>% 
+    unnest_tokens(word, text) %>% 
+    anti_join(stop_words, by = 'word')
+
+train_clean %>%
+    count(word) %>% 
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = FALSE, rot.per = 0, color = 'black'))
+```
+
+Ключевые слова подтвеждают заявленную тематику текстов, - жизнь и смерть, время и страх. Прослеживаются детективные и даже романтические нотки. Попробуем разделить облака по авторам.
+
+### Лавкрафт
+
+```{r, cache = T}
+train_clean %>%
+    filter(author == 'HPL') %>% 
+    count(word) %>% 
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = FALSE, rot.per = 0, color = 'blue4'))
+```
+
+### По
+
+```{r, cache = T}
+train_clean %>%
+    filter(author == 'EAP') %>% 
+    count(word) %>% 
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = FALSE, rot.per = 0, color = 'red4'))
+```
+
+### Шелли
+
+```{r, cache = T}
+train_clean %>%
+    filter(author == 'MWS') %>% 
+    count(word) %>% 
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = FALSE, rot.per = 0, color = 'purple4'))
+```
+
+Есть как общие мотивы, например, тематика времени близка всем троим, так и индивидуальные особенности. Тексты Лавкрафта ближе всего к классическому пониманию ужасов. У По можно заметить склонность к детективному стилю. Шелли не чужда романтичность.
+
+## Ключевые слова {.tabset .tabset-fade .tabset-pills}
+
+Более классическое представление о частоте встречаемости можно построить, используя столбчатые диаграммы. Ниже представлены две диаграммы, первая построена по словам, для второй предварительно использовался стемминг.
+
+```{r, cache = T}
+get_bar_plot <- function(author_id, clr, stem = F){
+    
+    if(stem){
+        t <- train_clean %>%
+            filter(author == author_id) %>% 
+            mutate(word = wordStem(word))
+    }else{
+        t <- train_clean %>%
+            filter(author == author_id)
+    }
+    
+    t %>% 
+        count(word) %>% 
+        top_n(30, n) %>%
+        arrange(n) %>%
+        mutate(word = factor(word, levels = word)) %>%
+        ggplot() +
+        geom_col(aes(word, n), fill = clr) +
+        ggtitle(author_id) +
+        coord_flip()
+}
+```
+
+### ключевые слова
+
+```{r, cache = T}
+pl1 <- get_bar_plot(author_id = 'HPL', clr = 'blue4')
+pl2 <- get_bar_plot(author_id = 'EAP', clr = 'red4')
+pl3 <- get_bar_plot(author_id = 'MWS', clr = 'purple4')
+
+grid.arrange(pl1, pl2, pl3, nrow = 1)
+```
+
+### ключевые слова + стемминг
+
+```{r, cache = T}
+pl1 <- get_bar_plot(author_id = 'HPL', clr = 'blue4', stem = T)
+pl2 <- get_bar_plot(author_id = 'EAP', clr = 'red4', stem = T)
+pl3 <- get_bar_plot(author_id = 'MWS', clr = 'purple4', stem = T)
+
+grid.arrange(pl1, pl2, pl3, nrow = 1)
+```
+Суда по частоте встреч имен Raymond и Perdita у Шелли, можно предположить, что значительная часть ее отрывков взята из одного произведения. Поможет ли это в дальнейшей классификации?
+
+## Уникальные слова
+
+Лексикон Шелли, предоставленный в наборе данных заметно меньше, чем у остальных. Возможно это связано с установленным ранее фактом о больших заимствованиях из одного произведения.
+```{r, cache = T}
+train_clean %>%
+    distinct(author, word) %>% 
+    count(author) %>% 
+    rename(`unique word count` = n)
+```
+
+```{r, cache = T}
+get_uniq_words_plot <- function(author_id){
+    
+    t <- train_clean %>% 
+        filter(author == author_id) %>% 
+        count(word) %>% 
+        arrange(desc(n))
+    
+    t %>% 
+        mutate(cumsum = cumsum(n),
+               cumsum_perc = round(100 * cumsum/sum(n), digits = 2)) %>% 
+        ggplot(aes(x = 1:nrow(t), y = cumsum_perc)) +
+        geom_line() +
+        geom_hline(yintercept = 50, color = 'black', alpha = 0.5) +
+        geom_hline(yintercept = 75, color = 'yellow', alpha = 0.5) +
+        geom_hline(yintercept = 90, color = 'orange', alpha = 0.5) +
+        geom_hline(yintercept = 95, color = 'red', alpha = 0.5) +
+        xlab('number of unique words') +
+        ylab('% Coverage') +
+        ggtitle(author_id) +
+        theme_bw()
+        
+}
+
+pl1 <- get_uniq_words_plot(author_id = 'HPL')
+pl2 <- get_uniq_words_plot(author_id = 'EAP')
+pl3 <- get_uniq_words_plot(author_id = 'MWS')
+
+grid.arrange(pl1, pl2, pl3, nrow = 1)
+```
+
+Как видно из графиков, для По и Лавкрафта достаточно примерно 7500 слов, чтобы перекрыть 90% их отрывков. Для Шелли достаточно примерно 5500 слов.
+
+## Частота совстречаемости слов {.tabset .tabset-fade .tabset-pills}
+
+Слова, расположенные близко к пунктирной линии, встречаются с одинаковой частотой у авторов. Для данной задачи они не особенно интересны. Чем слово дальше отстоит от линии, тем больший перекос в его использовании у одного автора.
+
+```{r, cache = T}
+word_freq <- train_clean %>%
+    count(author, word) %>%
+    group_by(author)  %>%
+    mutate(prop = n / sum(n)) %>% 
+    select(-n) %>% 
+    spread(author, prop)
+
+get_word_freq_plot <- function(author_id1, author_id2){
+    word_freq %>% 
+        filter(!is.na(!!author_id1) & !is.na(!!author_id2)) %>% 
+        mutate(clr = abs(!!author_id1 - !!author_id2)) %>%
+        ggplot(aes(x = !!author_id1, y = !!author_id2, color = clr)) +
+        geom_abline(color = "gray40", lty = 2) +
+        geom_jitter(alpha = 0.1, size = 2, width = 0.3, height = 0.3) +
+        geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
+        scale_x_log10(labels = percent_format()) +
+        scale_y_log10(labels = percent_format()) +
+        theme_bw() +
+        theme(legend.position = "none") +
+        labs(x = author_id1, y = author_id2)
+}
+```
+
+### Лавкрафт и По
+
+```{r, cache = T}
+get_word_freq_plot(author_id1 = quo(HPL), author_id2 = quo(EAP))
+```
+
+### Лавкрафт и Шелли
+
+```{r, cache = T}
+get_word_freq_plot(author_id1 = quo(HPL), author_id2 = quo(MWS))
+```
+
+### По и Шелли
+
+```{r, cache = T}
+get_word_freq_plot(author_id1 = quo(EAP), author_id2 = quo(MWS))
+```
+
+## Корреляция частот совстречаемости
+
+Также стоит посмотреть на результаты корреляционного анализ частот совстречаемости. Еще раз можно убедиться, что у авторов много общего.
+
+```{r, cache = T}
+word_freq %>%
+    select(-word) %>%
+    cor(use = 'complete.obs', method = 'pearson') %>%
+    corrplot(type = 'lower',
+             method = 'number',
+             diag = F)
+```
+
+## TF-IDF {.tabset .tabset-fade .tabset-pills}
+
+[TF](https://ru.wikipedia.org/wiki/TF-IDF) (term frequency — частота слова) — отношение числа вхождений некоторого слова к общему числу слов документа. Таким образом, оценивается важность слова $t_i$ в пределах отдельного документа.
+
+\begin{align}
+    tf(i,d) = \frac{n_{t}}{\sum_k n_{k}} 
+\end{align}
+
+где $n_t$ есть число вхождений слова $t$ в документ, а в знаменателе — общее число слов в данном документе.
+
+IDF (inverse document frequency — обратная частота документа) — инверсия частоты, с которой некоторое слово встречается в документах коллекции. Учёт IDF уменьшает вес широкоупотребительных слов. Для каждого уникального слова в пределах конкретной коллекции документов существует только одно значение IDF.
+
+\begin{align}
+    idf(t,D) = \mbox{log} \frac{|D|}{|\{d_i \in D \ | \ t \in d_i\}|}
+\end{align}
+
+где
+
+* $D$ — число документов в коллекции;
+* ${|\{d_i \in D \ | \ t \in d_i\}|}$ — число документов из коллекции $D$, в которых встречается $t$ (когда $n_t \neq 0$).
+
+Таким образом, мера TF-IDF является произведением двух сомножителей:
+
+\begin{align}
+    tf\mbox- idf(t,d,D) = tf(t,d) \times idf(t,D)
+\end{align}
+
+Большой вес в TF-IDF получат слова с высокой частотой в пределах конкретного документа и с низкой частотой употреблений в других документах. Наиболее высокие значения имеют имена собственные. Можно сделать вывод, что Шелли более склонна к их использованию в тексте. Также можно предположить, что эта мера окажется значимой при классификации.
+
+```{r, cache = T}
+tf_idf <- train_clean %>%
+    count(author, word) %>% 
+    bind_tf_idf(word, author, n)
+
+get_tf_idf_plot <- function(df, cnt){
+    df %>%
+        arrange(desc(tf_idf)) %>%
+        mutate(word = factor(word, levels = rev(unique(word)))) %>%
+        top_n(cnt, tf_idf) %>%
+        ggplot(aes(word, tf_idf, fill = author)) +
+        scale_fill_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+        geom_col() +
+        labs(x = NULL, y = 'TF-IDF values') +
+        theme_bw() +
+        theme(legend.position = 'top') +
+        coord_flip()
+}
+
+get_tf_idf_facet_plot <- function(df, cnt){
+    df %>%
+        arrange(desc(tf_idf)) %>%
+        mutate(word = factor(word, levels = rev(unique(word)))) %>%
+        group_by(author) %>%
+        top_n(cnt, tf_idf) %>%
+        ungroup() %>% 
+        ggplot(aes(word, tf_idf, fill = author)) +
+        scale_fill_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+        geom_col() +
+        labs(x = NULL, y = 'TF-IDF values') +
+        theme_bw() +
+        theme(legend.position = 'none') +
+        facet_wrap(~author, ncol = 3, scales = 'free_y') +
+        coord_flip()
+}
+```
+
+### общие униграммы
+
+```{r, cache = T}
+get_tf_idf_plot(tf_idf, 20)
+```
+
+### униграммы по авторам
+
+```{r, cache = T}
+get_tf_idf_facet_plot(tf_idf, 20)
+```
+
+## Биграммы {.tabset .tabset-fade .tabset-pills}
+
+Помимо одиночных слов важное значение могут иметь словосочетания, в частности би- и триграммы. Помимо имен собственных здесь начинают появляться характерные сочетания. Как ни странно, и По, и Лавкрафт, оказывается, любили посмеяться. Шелли неравнодушна к сочетаниям, начинающимся на *dear*. По вспоминает каких-то многочисленных *madame*, а Лавкрафт нагоняет жути своими *lurking fear* и *ancient house*
+
+```{r, cache = T}
+train_clean_bigram <- train %>% 
+    unnest_tokens(word, text, token = 'ngrams', n = 2) %>% 
+    separate(word, c('word1', 'word2'), sep = ' ') %>% 
+    anti_join(stop_words, by = c('word1' = 'word')) %>% 
+    anti_join(stop_words, by = c('word2' = 'word')) %>% 
+    unite(word, c('word1', 'word2'), sep = ' ')
+
+tf_idf_bigram <- train_clean_bigram %>%
+    count(author, word) %>% 
+    bind_tf_idf(word, author, n)
+```
+
+### общие биграммы
+
+```{r, cache = T}
+get_tf_idf_plot(tf_idf_bigram, 20)
+```
+
+### биграммы по авторам
+
+```{r, cache = T}
+get_tf_idf_facet_plot(tf_idf_bigram, 15)
+```
+
+## Триграммы {.tabset .tabset-fade .tabset-pills}
+
+По и Лавкрафт продолжают смеяться, причем По умудряется это делать по-разному, в свободное время подкидывая иностранных словечек. Лавкрафт на все лады вспоминает безумного араба аль Хазреда, а любимый Шелли Реймонд, оказывается, связан со вселенной [*доктора Кто*](https://en.wikipedia.org/wiki/Time_Lord). Интересные открытия.
+
+```{r, cache = T}
+train_clean_trigram <- train %>% 
+    unnest_tokens(word, text, token = 'ngrams', n = 3) %>% 
+    separate(word, c('word1', 'word2', 'word3'), sep = ' ') %>% 
+    anti_join(stop_words, by = c('word1' = 'word')) %>% 
+    anti_join(stop_words, by = c('word2' = 'word')) %>% 
+    anti_join(stop_words, by = c('word3' = 'word')) %>% 
+    unite(word, c('word1', 'word2', 'word3'), sep = ' ')
+
+tf_idf_trigram <- train_clean_trigram %>%
+    count(author, word) %>% 
+    bind_tf_idf(word, author, n)
+```
+
+### общие триграммы
+
+```{r, cache = T}
+get_tf_idf_plot(tf_idf_trigram, 10)
+```
+
+### триграммы по авторам
+
+```{r, cache = T}
+get_tf_idf_facet_plot(tf_idf_trigram, 6)
+```
+
+## Анализ тональности
+
+
+
+
+<!-- \begin{equation} -->
+<!--   \label{eq:1} -->
+<!--   idf_i = \mbox{log} \frac{|D|}{|{d : t_i \in d}|} -->
+<!-- \end{equation} -->
+
+<!-- \begin{align} -->
+<!--   \tag{*} -->
+<!--   5 &= 5 -->
+<!-- \end{align} -->
+
+<!-- \begin{equation} -->
+<!--   \tag{**} -->
+<!--   f\left(k\right) = \binom{n}{k} p^k\left(1-p\right)^{n-k} -->
+<!--   (\#eq:binom) -->
+<!-- \end{equation}  -->

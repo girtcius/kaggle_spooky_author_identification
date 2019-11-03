@@ -1,17 +1,18 @@
-library(tidyverse)
-library(tidytext)
-library(textstem)
-library(qdap)
-library(caret)
-library(widyr)
-library(broom)
-library(keras)
-library(gridExtra)
-library(plotly)
-library(scales)
-library(ggcorrplot)
-library(RDRPOSTagger)
+require(tidyverse)
+require(tidytext)
+require(textstem)
+require(qdap)
+require(caret)
+require(widyr)
+require(broom)
+require(keras)
+require(gridExtra)
+require(plotly)
+require(scales)
+require(ggcorrplot)
+require(RDRPOSTagger)
 require(parallel)
+require(gmodels)
 
 numCores <- detectCores()
 
@@ -88,7 +89,7 @@ cor.test(data = wordProportion, ~ HPL + MWS)
 train_stylo <- train %>% select(ID) %>%
     mutate(word_count = str_count(train$text, '\\w+'),
            syll_count = as.vector(syllable_sum(
-               iconv(train$text, to='ASCII//TRANSLIT'))),  # syllable count
+               iconv(train$text, to='ASCII//TRANSLIT'), parallel = T)),  # syllable count
            nsyll_per_word = as.vector(syllable_sum(
                iconv(train$text, to='ASCII//TRANSLIT'))/word_count),  # number of syllables per word
            nchar = nchar(train$text),                               # character count
@@ -99,7 +100,8 @@ train_stylo <- train %>% select(ID) %>%
 
 test_stylo <- test %>% select(ID) %>%
     mutate(word_count = str_count(test$text, '\\w+'),
-           syll_count = as.vector(syllable_sum(iconv(test$text, to='ASCII//TRANSLIT'))),
+           syll_count = as.vector(syllable_sum(
+               iconv(test$text, to='ASCII//TRANSLIT'), parallel = T)),
            nsyll_per_word = as.vector(syllable_sum(iconv(test$text, to='ASCII//TRANSLIT'))/word_count),
            nchar = nchar(test$text),
            nchar_per_word = nchar/word_count,
@@ -110,7 +112,8 @@ test_stylo <- test %>% select(ID) %>%
 
 train_tmp <- train %>% unnest_tokens(term, text, token = "ngrams", n=1) %>%
     mutate(stop_word_ind = as.integer(term %in% stop_words$word),
-           # syll_count = as.vector(syllable_sum(iconv(.$term, to='ASCII//TRANSLIT'), parallel = T)),
+           # syll_count = as.vector(syllable_sum(
+           # iconv(.$term, to='ASCII//TRANSLIT'), parallel = T)),
            word_length = nchar(term)) %>%
     group_by(ID) %>%
     summarise(nStopWord = sum(stop_word_ind),         # stopwords count
@@ -123,7 +126,8 @@ train_tmp <- train %>% unnest_tokens(term, text, token = "ngrams", n=1) %>%
 
 test_tmp <- test %>% unnest_tokens(term, text, token = "ngrams", n=1) %>%
     mutate(stop_word_ind = as.integer(term %in% stop_words$word),
-           # syll_count = as.vector(syllable_sum(iconv(.$term, to='ASCII//TRANSLIT'))),
+           # syll_count = as.vector(syllable_sum(
+           # iconv(.$term, to='ASCII//TRANSLIT'))),
            word_length = nchar(term)) %>%
     group_by(ID) %>%
     summarise(nStopWord = sum(stop_word_ind),
@@ -504,8 +508,8 @@ for (j in 1:length(te_ch)) {
 }
 test_pos_tag <- bind_rows(test_pos_tag_list)
 
-# train_pos_tag <- rdr_pos(tagger_pos, x = train$text, doc_id = train$ID)
-# test_pos_tag <- rdr_pos(tagger_pos, x = test$text, doc_id = test$ID)
+train_pos_tag <- rdr_pos(tagger_pos, x = train$text, doc_id = train$ID)
+test_pos_tag <- rdr_pos(tagger_pos, x = test$text, doc_id = test$ID)
 
 # Universal POS annotation
 tagger_upos <- rdr_model(language = "English", annotation = "UniversalPOS")
@@ -529,8 +533,8 @@ for (j in 1:length(te_ch)) {
 }
 test_upos_tag <- bind_rows(test_upos_tag_list)
 
-# train_upos_tag <- rdr_pos(tagger_upos, x = train$text, doc_id = train$ID)
-# test_upos_tag <- rdr_pos(tagger_upos, x = test$text, doc_id = test$ID)
+train_upos_tag <- rdr_pos(tagger_upos, x = train$text, doc_id = train$ID)
+test_upos_tag <- rdr_pos(tagger_upos, x = test$text, doc_id = test$ID)
 
 # Penn Treebank POS tag count for each ID
 train_pos_count <- train_pos_tag %>%
@@ -1461,14 +1465,14 @@ rownames(metrics_char6Gp2count) <- paste0("fold ", 1:5, ":")
 metrics_char6Gp2count
 
 # From POS tag sequence for each ID
-train_textTag <- train_pos_tag %>% 
+train_textTag <- train_pos_tag %>% rename(ID = doc_id) %>% 
     mutate(pos = str_replace_all(.$pos, "\\$", "S")) %>%
-    group_by(doc_id) %>%
+    group_by(ID) %>%
     summarise(textTag = str_c(pos, collapse = " "))
 
-test_textTag <- test_pos_tag %>% 
+test_textTag <- test_pos_tag %>% rename(ID = doc_id) %>% 
     mutate(pos = str_replace_all(.$pos, "\\$", "S")) %>%
-    group_by(doc_id) %>%
+    group_by(ID) %>%
     summarise(textTag = str_c(pos, collapse = " "))
 
 
@@ -1744,7 +1748,7 @@ word_pmi <- train %>% select(-author) %>% bind_rows(test) %>%
     cast_sparse(item1, item2, pmi)
 
 # Get principal components on word pmi matix
-pca_word_pmi <- (prcomp(word_pmi, center = TRUE, scale. = TRUE))$x %>% data.frame
+pca_word_pmi <- (fast.prcomp(word_pmi, center = TRUE, scale. = TRUE))$x %>% data.frame
 colnames(pca_word_pmi) <- paste0("wordPmi", colnames(pca_word_pmi))
 pca_word_pmi <- data_frame(word = rownames(word_pmi)) %>% bind_cols(pca_word_pmi)
 
@@ -1768,8 +1772,8 @@ x_test_meanWordPmiPC <- test[,"ID"] %>%
 x_test_meanWordPmiPC[is.na(x_test_meanWordPmiPC)] <- 0
 rm(meanWordPmiPC,pca_word_pmi,word_pmi)
 
-x_train_meanWordPmiPC <- train_meanWordPmiPC %>% select(-ID) %>% as.matrix()
-x_test_meanWordPmiPC <- test_meanWordPmiPC %>% select(-ID) %>% as.matrix()
+x_train_meanWordPmiPC <- x_train_meanWordPmiPC %>% select(-ID) %>% as.matrix()
+x_test_meanWordPmiPC <- x_test_meanWordPmiPC %>% select(-ID) %>% as.matrix()
 
 # Function to build model, make predictions and evaluate on given fold and test data
 meanWordPmiPCModel <- function(x_train_meanWordPmiPC, x_test_meanWordPmiPC, fold, y_train){
@@ -1973,6 +1977,6 @@ sai_xgbt <- train(x = dtrain %>% select(setdiff(sig_.01_f, highCorrVars)),
 )
 sai_xgbt
 
-sub_sai_xgbt <- read_csv("sample_submission.csv") %>% select(id) %>%
+sub_sai_xgbt <- read_csv("data/sample_submission.csv") %>% select(id) %>%
     bind_cols(predict(sai_xgbt, dtest, type = "prob"))
-write_excel_csv(sub_sai_xgbt, "sub_sai_xgbt.csv")
+write_excel_csv(sub_sai_xgbt, "stacked_xgb.csv.csv")
