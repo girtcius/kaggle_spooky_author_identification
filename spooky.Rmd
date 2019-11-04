@@ -59,8 +59,8 @@ MathJax.Hub.Config({
 });
 </script>
 
-```{r setup, include=FALSE, echo=FALSE}
-knitr::opts_chunk$set(echo = TRUE, error=FALSE)
+```{r setup, include = F, echo = F}
+knitr::opts_chunk$set(echo = T, error = F)
 # options(knitr.table.format = "latex", booktabs = T)
 ```
 
@@ -149,17 +149,20 @@ require(gridExtra)
 require(plotly)
 require(scales)
 require(ggcorrplot)
-require(RDRPOSTagger)
+# require(RDRPOSTagger)
 require(parallel)
 require(gmodels)
 require(knitr)
+require(udpipe)
+require(zoo)
+require(tibbletime)
 # require(plotly)
 # require(kableExtra)
 ```
 
 ## загрузка данных
 
-```{r warning=FALSE, results=FALSE, message = FALSE}
+```{r warning = F, results = F, message = F}
 train <- read_csv('data/train.csv')
 test <- read_csv('data/test.csv')
 sample <- read.csv('data/sample_submission.csv')
@@ -295,7 +298,7 @@ train %>%
 train %>%
     unnest_tokens(word, text) %>% 
     count(word) %>% 
-    with(wordcloud(word, n, max.words = 50, scale = c(3, 1.5), random.order = FALSE, rot.per = 0, color = 'black'))
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1.5), random.order = F, rot.per = 0, color = 'black'))
 ```
 
 Ожидаемо, вспомогательные части речи, - союзы, артикли, местоимения etc в тексте встречаются чаще. Стоит ли от них избавляться при построении модели? Важность признаков будет рассмотрена позже, на этапе feature engineering. Ниже представлен вариант облака без учета вспомогательных слов.
@@ -307,10 +310,12 @@ train_clean <- train %>%
 
 train_clean %>%
     count(word) %>% 
-    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = FALSE, rot.per = 0, color = 'black'))
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = F, rot.per = 0, color = 'black'))
 ```
 
 Ключевые слова подтвеждают заявленную тематику текстов, - жизнь и смерть, время и страх. Прослеживаются детективные и даже романтические нотки. Попробуем разделить облака по авторам.
+
+Есть как общие мотивы, например, тематика времени близка всем троим, так и индивидуальные особенности. Тексты Лавкрафта ближе всего к классическому пониманию ужасов. У По можно заметить склонность к детективному стилю. Шелли не чужда романтичность.
 
 ### Лавкрафт
 
@@ -318,7 +323,7 @@ train_clean %>%
 train_clean %>%
     filter(author == 'HPL') %>% 
     count(word) %>% 
-    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = FALSE, rot.per = 0, color = 'blue4'))
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = F, rot.per = 0, color = 'blue4'))
 ```
 
 ### По
@@ -327,7 +332,7 @@ train_clean %>%
 train_clean %>%
     filter(author == 'EAP') %>% 
     count(word) %>% 
-    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = FALSE, rot.per = 0, color = 'red4'))
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = F, rot.per = 0, color = 'red4'))
 ```
 
 ### Шелли
@@ -336,14 +341,14 @@ train_clean %>%
 train_clean %>%
     filter(author == 'MWS') %>% 
     count(word) %>% 
-    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = FALSE, rot.per = 0, color = 'purple4'))
+    with(wordcloud(word, n, max.words = 50, scale = c(3, 1), random.order = F, rot.per = 0, color = 'purple4'))
 ```
-
-Есть как общие мотивы, например, тематика времени близка всем троим, так и индивидуальные особенности. Тексты Лавкрафта ближе всего к классическому пониманию ужасов. У По можно заметить склонность к детективному стилю. Шелли не чужда романтичность.
 
 ## Ключевые слова {.tabset .tabset-fade .tabset-pills}
 
 Более классическое представление о частоте встречаемости можно построить, используя столбчатые диаграммы. Ниже представлены две диаграммы, первая построена по словам, для второй предварительно использовался стемминг.
+
+Суда по частоте встреч имен Raymond и Perdita у Шелли, можно предположить, что значительная часть ее отрывков взята из одного произведения. Поможет ли это в дальнейшей классификации?
 
 ```{r, cache = T}
 get_bar_plot <- function(author_id, clr, stem = F){
@@ -388,7 +393,6 @@ pl3 <- get_bar_plot(author_id = 'MWS', clr = 'purple4', stem = T)
 
 grid.arrange(pl1, pl2, pl3, nrow = 1)
 ```
-Суда по частоте встреч имен Raymond и Perdita у Шелли, можно предположить, что значительная часть ее отрывков взята из одного произведения. Поможет ли это в дальнейшей классификации?
 
 ## Уникальные слова
 
@@ -418,7 +422,7 @@ get_uniq_words_plot <- function(author_id){
         geom_hline(yintercept = 90, color = 'orange', alpha = 0.5) +
         geom_hline(yintercept = 95, color = 'red', alpha = 0.5) +
         xlab('number of unique words') +
-        ylab('% Coverage') +
+        ylab('% coverage') +
         ggtitle(author_id) +
         theme_bw()
         
@@ -450,13 +454,13 @@ get_word_freq_plot <- function(author_id1, author_id2){
         filter(!is.na(!!author_id1) & !is.na(!!author_id2)) %>% 
         mutate(clr = abs(!!author_id1 - !!author_id2)) %>%
         ggplot(aes(x = !!author_id1, y = !!author_id2, color = clr)) +
-        geom_abline(color = "gray40", lty = 2) +
+        geom_abline(color = 'gray40', lty = 2) +
         geom_jitter(alpha = 0.1, size = 2, width = 0.3, height = 0.3) +
-        geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
+        geom_text(aes(label = word), check_overlap = T, vjust = 1.5) +
         scale_x_log10(labels = percent_format()) +
         scale_y_log10(labels = percent_format()) +
         theme_bw() +
-        theme(legend.position = "none") +
+        theme(legend.position = 'none') +
         labs(x = author_id1, y = author_id2)
 }
 ```
@@ -629,10 +633,608 @@ get_tf_idf_plot(tf_idf_trigram, 10)
 get_tf_idf_facet_plot(tf_idf_trigram, 6)
 ```
 
-## Анализ тональности
+# Feature engineering
+
+## Стилометрические признаки
+
+В качестве основных признаков можно рассматривать следующее:
+
+- количество слов
+- количество символов
+- среднее количество символов в слове
+- количество слогов
+- среднее количество слогов в слове
+- количество односложных слов
+- количество многосложных слов
+- количество слов, начинающихся с прописной буквы
+- количество слов, в которых все буквы прописные
+- количество уникальных слов
+- количество стоп-слов
+- количество длинных слов (больше n символов)
+- количество пунктуационных символов
+
+Для извлечения слогов используется функция *syllable_sum*, которая довольно капризно относчится к входным данным. В частности, она выдает ошибки при пропущенных значениях. При обычной конвертации пара строк как раз оказыватся в таком виде (где в исходном тексте были редкие символы, например, *'ΥΠΝΟΣ*). Поэтому выполнять придется с ручной очисткой.
+
+```{r, cache = T}
+
+train_stylometry <- train %>% 
+    mutate(ascii_text = iconv(text, to='ASCII//TRANSLIT'),
+           ascii_text = ifelse(is.na(ascii_text), text, ascii_text),
+           ascii_text = str_replace_all(ascii_text, c("ΥΠΝΟΣ" = "Hypnos", "Οἶδα Οἶδα" = "Oida Oida")),
+           word_count = str_count(text, '\\w+'),
+           nchar = nchar(text),
+           nchar_per_word = nchar/word_count,
+           syll_count = syllable_sum(ascii_text),
+           nsyll_per_word = syll_count/word_count,
+           tc_count = str_count(text, '[A-Z][a-z]+'),
+           uc_count = str_count(text, '[A-Z][A-Z]+'),
+           punctuation_count = str_count(text, '[:punct:]')) %>% 
+    select(-c(text, ascii_text, author))
+
+test_stylometry <- test %>% 
+    mutate(ascii_text = iconv(text, to='ASCII//TRANSLIT'),
+           word_count = str_count(text, '\\w+'),
+           nchar = nchar(text),
+           nchar_per_word = nchar/word_count,
+           syll_count = syllable_sum(ascii_text),
+           nsyll_per_word = syll_count/word_count,
+           tc_count = str_count(text, '[A-Z][a-z]+'),
+           uc_count = str_count(text, '[A-Z][A-Z]+'),
+           punctuation_count = str_count(text, '[:punct:]')) %>% 
+    select(-c(text, ascii_text))
+ 
+```
+
+```{r, cache = T}
+ 
+train_tmp <- train %>%
+    unnest_tokens(term, text, token = 'ngrams', n=1) %>%
+    mutate(stop_word_ind = as.integer(term %in% stop_words$word),
+           ascii_term = iconv(term, to='ASCII//TRANSLIT'),
+           ascii_term = ifelse(is.na(ascii_term), term, ascii_term),
+           ascii_term = str_replace_all(ascii_term, c("υπνος" = "hypnos", "οἶδα" = "oida")),
+           syll_count = syllable_sum(ascii_term, parallel = T),
+           word_length = nchar(term)) %>%
+    group_by(id) %>%
+    summarise(nStopWord = sum(stop_word_ind),
+              nUniqueWord = n_distinct(term),
+              avg_word_length = mean(word_length),
+              ngt6lWord = sum(word_length > 6),
+              n1SylWord = sum(syll_count == 1),
+              nPolySylWord = sum(syll_count > 2)
+              )
+
+test_tmp <- test %>%
+    unnest_tokens(term, text, token = 'ngrams', n=1) %>%
+    mutate(stop_word_ind = as.integer(term %in% stop_words$word),
+           ascii_term = iconv(term, to='ASCII//TRANSLIT'),
+           ascii_term = ifelse(is.na(ascii_term), term, ascii_term),
+           ascii_term = str_replace_all(ascii_term, c("υπνος" = "hypnos", "οἶδα" = "oida")),
+           syll_count = syllable_sum(ascii_term, parallel = T),
+           word_length = nchar(term)) %>%
+    group_by(id) %>%
+    summarise(nStopWord = sum(stop_word_ind),
+              nUniqueWord = n_distinct(term),
+              avg_word_length = mean(word_length),
+              ngt6lWord = sum(word_length > 6),
+              n1SylWord = sum(syll_count == 1),
+              nPolySylWord = sum(syll_count > 2)
+              )
+```
+
+```{r, cache = T}
+train_stylometry <- train_stylometry %>% 
+    left_join(train_tmp, by = 'id') %>%
+    mutate(unique_r = nUniqueWord/word_count,
+           w_p = word_count - punctuation_count,
+           w_p_r = w_p/word_count,
+           stop_r = nStopWord/word_count,
+           w_p_stop = w_p - nStopWord,
+           w_p_stop_r = w_p_stop/word_count,
+           num_words_upper_r = uc_count/word_count,
+           num_words_title_r = tc_count/word_count)
+
+test_stylometry <- test_stylometry %>% 
+    left_join(test_tmp, by = 'id') %>%
+    mutate(unique_r = nUniqueWord/word_count,
+           w_p = word_count - punctuation_count,
+           w_p_r = w_p/word_count,
+           stop_r = nStopWord/word_count,
+           w_p_stop = w_p - nStopWord,
+           w_p_stop_r = w_p_stop/word_count,
+           num_words_upper_r = uc_count/word_count,
+           num_words_title_r = tc_count/word_count)
+
+```
+
+```{r, cache = T}
+train  %>%
+    left_join(train_stylometry, by = 'id') %>%
+    select(-c(text, id)) %>%
+    filter(nchar < 1000) %>%
+    group_by(author) %>%
+    summarise_all(mean) %>%
+    gather(feature, value, -author) %>%
+    ggplot(aes(x = feature, y = value, color = author)) +
+    scale_color_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+    geom_point(alpha = 0.6, size = 3) +
+    scale_y_log10() +
+    labs(x = 'feature', y = 'mean value by author') +
+    coord_flip() +
+    theme_bw()
+```
+
+Наиболее интересно выглядят признаки, связанные с прописными буквами.
+
+## Признаки, основанные на тональности {.tabset .tabset-fade .tabset-pills}
+
+### Тональность глаголов и интенсификаторы
+
+Эта методика была найдена в одном из примеров и показалась интересной.
+
+```{r, cache = T}
+thought_verbs <- c('analyze', 'apprehend', 'assume', 'believe', 'calculate', 'cerebrate', 'cogitate',
+                   'comprehend', 'conceive', 'concentrate', 'conceptualize', 'conclude', 'consider',
+                   'construe', 'contemplate', 'deduce', 'deem', 'delibrate', 'desire', 'diagnose',
+                   'doubt', 'envisage', 'envision', 'evaluate', 'excogitate', 'extrapolate', 'fantasize',
+                   'forget', 'forgive', 'formulate', 'hate', 'hypothesize', 'imagine', 'infer', 
+                   'intellectualize', 'intrigue', 'guess', 'introspect', 'judge', 'know', 'love', 
+                   'lucubrate', 'marvel', 'meditate', 'note', 'notice', 'opine', 'perpend', 'philosophize',
+                   'ponder', 'question', 'ratiocinate', 'rationalize', 'realize', 'reason', 'recollect', 
+                   'reflect', 'remember', 'reminisce', 'retrospect', 'ruminate', 'sense', 'speculate',
+                   'stew', 'strategize', 'suppose', 'suspect', 'syllogize', 'theorize', 'think', 
+                   'understand', 'visualize', 'want', 'weigh', 'wonder')
+
+loud_verbs <- c('cry', 'exclaim', 'shout', 'roar', 'scream', 'shriek', 'vociferated', 'bawl',
+                'call', 'ejaculate', 'retort', 'proclaim', 'announce', 'protest', 'accost', 'declare')
+
+neutral_verbs <- c('say', 'reply', 'observe', 'rejoin', 'ask', 'answer', 'return', 'repeat', 'remark',
+                   'enquire', 'respond', 'suggest', 'explain', 'utter', 'mention')
+
+quiet_verbs <- c('whisper', 'murmur', 'sigh', 'grumble', 'mumble', 'mutter', 'whimper', 'hush', 'falter',
+                 'stammer', 'tremble', 'gasp', 'shudder')
+
+qualifiers <- c('very', 'too', 'so', 'quite', 'rather', 'little', 'pretty', 'somewhat', 'various', 'almost', 
+                'much', 'just', 'indeed', 'still', 'even', 'a lot', 'kind of', 'sort of')
+
+train_tmp <- train %>%
+    unnest_tokens(term, text, token = 'ngrams', n=1) %>% 
+    bind_rows(train %>% unnest_tokens(term, text, token = 'ngrams', n=2)) %>%
+    mutate(term = lemmatize_words(term),
+           qualifier_ind = as.integer(term %in% qualifiers),
+           thought_verbs_ind = as.integer(term %in% thought_verbs),
+           loud_verbs_ind = as.integer(term %in% loud_verbs),
+           neutral_verbs_ind = as.integer(term %in% neutral_verbs),
+           quiet_verbs_ind = as.integer(term %in% quiet_verbs)) %>%
+    group_by(id) %>%
+    summarise(qualifier_count = sum(qualifier_ind),
+              thought_verbs_count = sum(thought_verbs_ind),
+              loud_verbs_count = sum(loud_verbs_ind),
+              neutral_verbs_count = sum(neutral_verbs_ind),
+              quiet_verbs_count = sum(quiet_verbs_ind))
+
+test_tmp <- test %>%
+    unnest_tokens(term, text, token = 'ngrams', n=1) %>% 
+    bind_rows(test %>% unnest_tokens(term, text, token = 'ngrams', n=2)) %>%
+    mutate(term = lemmatize_words(term),
+           qualifier_ind = as.integer(term %in% qualifiers),
+           thought_verbs_ind = as.integer(term %in% thought_verbs),
+           loud_verbs_ind = as.integer(term %in% loud_verbs),
+           neutral_verbs_ind = as.integer(term %in% neutral_verbs),
+           quiet_verbs_ind = as.integer(term %in% quiet_verbs)) %>%
+    group_by(id) %>%
+    summarise(qualifier_count = sum(qualifier_ind),
+              thought_verbs_count = sum(thought_verbs_ind),
+              loud_verbs_count = sum(loud_verbs_ind),
+              neutral_verbs_count = sum(neutral_verbs_ind),
+              quiet_verbs_count = sum(quiet_verbs_ind))
+ 
+train_stylometry <- train_stylometry %>% 
+    left_join(train_tmp, by = 'id')
+
+test_stylometry <- test_stylometry %>% 
+    left_join(test_tmp, by = 'id')
+```
+
+```{r, cache = T}
+train  %>%
+    left_join(train_tmp, by = 'id') %>%
+    select(-c(text, id)) %>%
+    group_by(author) %>%
+    summarise_all(mean) %>%
+    gather(feature, value, -author) %>%
+    ggplot(aes(x = feature, y = value, color = author)) +
+    scale_color_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+    geom_point(alpha = 0.6, size = 3) +
+    scale_y_log10() +
+    labs(x = 'feature', y = 'mean value by author') +
+    coord_flip() +
+    theme_bw()
+```
+
+Разделение наблюдается по 4-м признакам из 5.
+
+### Sentiment analysis
+
+Для анализа эмоциональной окраски используется *tidytext*. Это не самый лучший пакет для анализа литературного текста, но он простой и покрывает большую часть nlp задач. В качестве словарей используются [AFINN](https://www2.imm.dtu.dk/pubdb/views/publication_details.php?id=6010) и [NRC](https://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm)
+
+```{r, cache = T}
+train_senti <- train %>%
+    unnest_tokens(word, text) %>%
+    inner_join(get_sentiments('nrc'), by = 'word') %>%
+    count(id, sentiment) %>%
+    spread(sentiment, n, sep = '_', fill = 0)
+
+test_senti <- test %>%
+    unnest_tokens(word, text) %>%
+    inner_join(get_sentiments('nrc'), by = 'word') %>%
+    count(id, sentiment) %>%
+    spread(sentiment, n, sep = '_', fill = 0)
+
+afinn_sentiment <- train %>%
+    select(-author) %>%
+    bind_rows(test) %>%
+    unnest_tokens(word, text) %>%
+    inner_join(get_sentiments('afinn'), by = 'word') %>%
+    group_by(id) %>%
+    summarise(sentiment_afinn = mean(value))
+
+train_senti <- train_senti %>%
+    left_join(afinn_sentiment, by = 'id') %>%
+    replace_na(list(sentiment_afinn = 0))
+
+test_senti <- test_senti %>%
+    left_join(afinn_sentiment, by = 'id') %>%
+    replace_na(list(sentiment_afinn = 0))
+
+```
+
+```{r, cache = T}
+train %>%
+    right_join(train_senti, by = 'id') %>%
+    select(-c(text, id)) %>%
+    group_by(author) %>%
+    summarise_all(mean) %>%
+    gather(feature, value, -author) %>%
+    ggplot(aes(x = feature, y = value, color = author)) +
+    scale_color_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+    geom_point(alpha = 0.6, size = 3) +
+    labs(x = 'feature', y = 'mean value by author') +
+    coord_flip() +
+    theme_bw()
+```
+
+Интересным получится показатель *afinn*, хорошо сегментирующий тексты Лавкрафта, как несущие негативную окраску.
+
+## Признаки, основанные на частях речи (POS-tagging) {.tabset .tabset-fade .tabset-pills}
+
+В R присутствует большой выбор инструментов для разметки частей речи (а если хочется еще большего, всегда есть *reticulate*). Здесь используется пакет *udpipe*. Операция разметки медленная, поэтому отдельными блоками.
+
+```{r, cache = T}
+train <- train %>% 
+    mutate(clean_text = str_replace(text, '^, ', ''),
+           clean_text = str_replace(text, '^\\.\" ', ''),
+           clean_text = str_replace_all(text, '\"', ''))
+
+test <- test %>% 
+    mutate(clean_text = str_replace_all(text, '\"', ''))
+```
+
+```{r, cache = T, message = F}
+udmodel <- udpipe_download_model(language = 'english')
+udmodel <- udpipe_load_model(file = udmodel$file_model)
+```
+
+```{r, cache = T}
+x <- udpipe_annotate(object = udmodel, x = train$clean_text,  doc_id = train$id)
+x <- as.data.frame(x)
+```
+
+```{r, cache = T}
+y <- udpipe_annotate(object = udmodel, x = test$clean_text,  doc_id = test$id)
+y <- as.data.frame(y)
+```
+
+```{r, cache = T}
+train_udp_pos_count <- x %>%
+  count(doc_id, xpos) %>%
+  spread(xpos, n, fill = 0) %>%
+  rename(id = doc_id)
+
+test_udp_pos_count <- y %>%
+  count(doc_id, xpos) %>%
+  spread(xpos, n, fill = 0) %>% 
+  select(-c(`''`, `,`, `.`, `:`, '``')) %>%
+  rename(id = doc_id)
+
+train_udp_pos_count <- train_udp_pos_count %>% 
+  select(intersect(colnames(.), colnames(test_udp_pos_count)))
+
+train_udp_upos_count <- x %>%
+  count(doc_id, upos) %>%
+  spread(upos, n, fill = 0) %>% 
+  select(-PUNCT) %>%
+  rename(id = doc_id)
+
+test_udp_upos_count <- y %>%
+  count(doc_id, upos) %>%
+  spread(upos, n, fill = 0) %>% 
+  select(-PUNCT) %>%
+  rename(id = doc_id)
+
+train_pos_tagged <- x
+test_pos_tagged <- y
+```
+
+### Language-specific POS tag
+
+```{r, cache = T}
+train %>%  
+    left_join(train_udp_pos_count, by = 'id') %>%
+    select(-c(text, id, clean_text)) %>%
+    group_by(author) %>%
+    summarise_all(mean) %>%
+    gather(feature, value, -author) %>%
+    ggplot(aes(x = feature, y = value, color = author)) +
+    scale_color_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+    geom_point(alpha = 0.6, size = 3) +
+    labs(x = 'feature', y = 'mean value by author') +
+    coord_flip() +
+    theme_bw()
+```
+
+### Universal POS tags
+
+```{r, cache = T}
+train %>%  
+    left_join(train_udp_upos_count, by = 'id') %>%
+    select(-c(text, id, clean_text)) %>%
+    group_by(author) %>%
+    summarise_all(mean) %>%
+    gather(feature, value, -author) %>%
+    ggplot(aes(x = feature, y = value, color = author)) +
+    scale_color_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+    geom_point(alpha = 0.6, size = 3) +
+    labs(x = 'feature', y = 'mean value by author') +
+    coord_flip() +
+    theme_bw()
+```
+
+## Признаки, основанные на n-граммах
+
+```{r, cache = T}
+author_unigrams_tfidf <- train %>%
+    unnest_tokens(term, text, token = 'ngrams', n=1) %>%
+    count(author, term) %>%
+    bind_tf_idf(term, author, n)
+
+author_bigrams_tfidf <- train %>%
+    unnest_tokens(term, text, token = 'ngrams', n=2) %>%
+    count(author, term) %>%
+    bind_tf_idf(term, author, n)
+
+author_trigrams_tfidf <- train %>%
+    unnest_tokens(term, text, token = 'ngrams', n=3) %>%
+    count(author, term) %>%
+    bind_tf_idf(term, author, n)
+
+author_tetragrams_tfidf <- train %>%
+    unnest_tokens(term, text, token = 'ngrams', n=4) %>%
+    count(author, term) %>%
+    bind_tf_idf(term, author, n)
+
+author_char_bigrams_tfidf <- train %>% 
+    unnest_tokens(shingle, text, token = 'character_shingles', n=2, strip_non_alphanum = F) %>%
+    count(author, shingle) %>%
+    bind_tf_idf(shingle, author, n)
+
+author_char_trigrams_tfidf <- train %>% 
+    unnest_tokens(shingle, text, token = 'character_shingles', n=3, strip_non_alphanum = F) %>%
+    count(author, shingle) %>%
+    bind_tf_idf(shingle, author, n)
+
+author_char_tetragrams_tfidf <- train %>% 
+    unnest_tokens(shingle, text, token = 'character_shingles', n=4, strip_non_alphanum = F) %>%
+    count(author, shingle) %>%
+    bind_tf_idf(shingle, author, n)
+
+author_char_pentagrams_tfidf <- train %>% 
+    unnest_tokens(shingle, text, token = 'character_shingles', n=5, strip_non_alphanum = F) %>%
+    count(author, shingle) %>%
+    bind_tf_idf(shingle, author, n)
+```
+
+```{r, cache = T}
+get_author_ngrams <- function(df, author_id){
+    df %>% filter(idf == max(idf, na.rm = T) & author == author_id & n > 25) %>% .[,2]
+}
+
+df_ngram <- list(author_unigrams_tfidf, author_bigrams_tfidf, author_trigrams_tfidf, author_tetragrams_tfidf,
+                author_char_bigrams_tfidf, author_char_trigrams_tfidf, author_char_tetragrams_tfidf,
+                author_char_pentagrams_tfidf)
+
+eap <- mapply(get_author_ngrams, df_ngram, rep('EAP', 8)) %>% unlist() %>% unique()
+hpl <- mapply(get_author_ngrams, df_ngram, rep('HPL', 8)) %>% unlist() %>% unique()
+mws <- mapply(get_author_ngrams, df_ngram, rep('MWS', 8)) %>% unlist() %>% unique()
+
+get_total_ngrams <- function(df){
+    map_df(1:4, ~ unnest_tokens(df, term, text, token = 'ngrams', n = .x)) %>%
+    bind_rows(map_df(2:5, ~ unnest_tokens(df, term, text, token = 'character_shingles', n = .x,
+                                          strip_non_alphanum = F))) %>%
+    mutate(EAP_only_ind = as.integer(term %in% eap),
+           HPL_only_ind = as.integer(term %in% hpl),
+           MWS_only_ind = as.integer(term %in% mws)) %>%
+    group_by(id) %>%
+    summarise(EAP_only_count = sum(EAP_only_ind),
+              HPL_only_count = sum(HPL_only_ind),
+              MWS_only_count = sum(MWS_only_ind))
+}
+
+train_author_only <- get_total_ngrams(train)
+test_author_only <- get_total_ngrams(test)
+
+get_author_pair_ngrams <- function(df, author_id1, author_id2){
+    df %>% filter(author == author_id1 | author == author_id2, idf == log(1.5)) %>%
+        group_by_at(2) %>% 
+        count(wt = n) %>% filter(n > 50) %>% .[,1]
+}
+
+eap_hpl <- mapply(get_author_pair_ngrams, df_ngram, rep('EAP', 8), rep('HPL', 8)) %>% unlist() %>% unique()
+eap_mws <- mapply(get_author_pair_ngrams, df_ngram, rep('EAP', 8), rep('MWS', 8)) %>% unlist() %>% unique()
+hpl_mws <- mapply(get_author_pair_ngrams, df_ngram, rep('HPL', 8), rep('MWS', 8)) %>% unlist() %>% unique()
+
+get_total_pair_ngrams <- function(df){
+    map_df(1:4, ~ unnest_tokens(df, term, text, token = 'ngrams', n = .x)) %>%
+    bind_rows(map_df(2:5, ~ unnest_tokens(df, term, text, token = 'character_shingles', n = .x,
+                                          strip_non_alphanum = F))) %>%
+    mutate(EAP_HPL_only_ind = as.integer(term %in% eap_hpl),
+           EAP_MWS_only_ind = as.integer(term %in% eap_mws),
+           HPL_MWS_only_ind = as.integer(term %in% hpl_mws)) %>%
+    group_by(id) %>%
+    summarise(EAP_HPL_only_count = sum(EAP_HPL_only_ind),
+              EAP_MWS_only_count = sum(EAP_MWS_only_ind),
+              HPL_MWS_only_count = sum(HPL_MWS_only_ind))
+}
+
+train_author_pair_only <- get_total_pair_ngrams(train)
+test_author_pair_only <- get_total_pair_ngrams(test)
+```
+
+```{r, cache = T}
+train %>% 
+    left_join(train_author_only, by = 'id') %>%
+    left_join(train_author_pair_only, by = 'id') %>%
+    select(-c(text, id, clean_text)) %>%
+    group_by(author) %>%
+    summarise_all(mean) %>%
+    gather(feature, value, -author) %>%
+    ggplot(aes(x = feature, y = value, color = author)) +
+    scale_color_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+    geom_point(alpha = 0.6, size = 3) +
+    labs(x = 'feature', y = 'mean value by author') +
+    coord_flip() +
+    theme_bw()
 
 
+```
 
+Признаки демонстрируют выраженную разделительную способность.
+
+## Гендерные признаки
+
+Проверим, нет ли у авторов предпочтений в области полов.
+
+```{r, cache = T}
+get_gender_plot <- function(m, f){
+    train %>%
+        unnest_tokens(word, text) %>%
+        filter((word == m) | (word == f)) %>%
+        mutate(word = as.factor(word)) %>%
+        mutate(word = fct_relevel(word, f, m)) %>%
+        ggplot(aes(word, fill = author)) +
+        geom_bar(position = 'dodge') +
+        scale_fill_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+        theme_bw()
+}
+
+pl1 <- get_gender_plot('man', 'woman')
+pl2 <- get_gender_plot('he', 'she')
+pl3 <- get_gender_plot('him', 'her')
+
+pl4 <- train %>%
+    unnest_tokens(word, text) %>%
+    mutate(male = (word %in% c('he', 'him', 'his', 'male', 'man', 'gentleman', 'sir', 'lord', 'men'))) %>%
+    mutate(female = (word %in% c('she', 'her', 'hers', 'female', 'woman', 'lady', 'madam', 'women' ))) %>%
+    unite(sex, male, female) %>%
+    mutate(sex = fct_recode(as.factor(sex), male = 'TRUE_FALSE', 
+                          female = 'FALSE_TRUE', other = 'FALSE_FALSE')) %>%
+    filter(sex != 'other') %>%
+    ggplot(aes(sex, fill = author)) +
+    labs(x = 'gender indicators') +
+    geom_bar(position = 'dodge') +
+    scale_fill_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+    theme_bw()
+
+grid.arrange(pl1, pl2, pl3, pl4, nrow = 2)
+
+train_gender <- train %>%
+    unnest_tokens(word, text) %>% 
+    mutate(male = (word %in% c('he', 'him', 'his', 'male', 'man', 'gentleman', 'sir', 'lord', 'men'))) %>%
+    mutate(female = (word %in% c('she', 'her', 'hers', 'female', 'woman', 'lady', 'madam', 'women' ))) %>% 
+    group_by(id) %>%
+    summarise(male = sum(male), female = sum(female))
+
+test_gender <- test %>%
+    unnest_tokens(word, text) %>% 
+    mutate(male = (word %in% c('he', 'him', 'his', 'male', 'man', 'gentleman', 'sir', 'lord', 'men'))) %>%
+    mutate(female = (word %in% c('she', 'her', 'hers', 'female', 'woman', 'lady', 'madam', 'women' ))) %>% 
+    group_by(id) %>%
+    summarise(male = sum(male), female = sum(female))
+```
+
+Лавкрафта, видимо, не особенно интересовали женские пресонажи. Хорошо, что он жил и работал не в наше время. По в общем-то тоже на грани фола. Шелли, ожидаемо, более склонна к женским персонажам. Тем не менее, у всех троих мужской пол доминирует в произведениях.
+
+## Аллитерации и ассонансы
+
+Аллитерация — повторение одинаковых или однородных согласных, ассонанс - повторение гласных. Используется в основном в поэзии для придания особого звучания тексту. Для простоты примем аллитерацию за повторение первых букв в словах, идущих подряд. *[a]rab [a]bdul [a]lhazred*. Также для большей надежности удалим стоп слова перед проверкой.
+
+```{r, cache = T}
+get_alliterations <- function(df, stop = F){
+    if(stop){
+        df <- df %>%
+            select(id, text) %>% 
+            unnest_tokens(word, text) %>% 
+            anti_join(stop_words, by = 'word')
+    }else{
+        df <- df %>%
+            select(id, text) %>% 
+            unnest_tokens(word, text)
+    }
+
+    df %>% 
+        mutate(first = str_sub(word, start = 1, end = 1),
+             f_lead_1 = lead(first, n = 1),
+             f_lead_2 = lead(first, n = 2),
+             id_lead_1 = lead(id, n = 1),
+             id_lead_2 = lead(id, n = 2),
+             allit2 = first == f_lead_1 & id == id_lead_1,
+             allit3 = first == f_lead_1 & first == f_lead_2 & id == id_lead_1 & id == id_lead_2
+             ) %>%
+        filter(!is.na(allit2)) %>%
+        group_by(id, allit2) %>%
+        count() %>%
+        spread(allit2, n) %>%
+        mutate(has_allit = !is.na(`TRUE`)) %>%
+        select(id, has_allit)
+}
+
+train_alliterations <- get_alliterations(train, stop = T)
+test_alliterations <- get_alliterations(test, stop = T)
+
+get_allit_plot <- function(df, title){
+    df %>% 
+        left_join(train, by = 'id') %>% 
+        group_by(author, has_allit) %>% 
+        count() %>% 
+        ungroup() %>% 
+        (function(df) left_join(df, df %>% group_by(author) %>% summarise(s = sum(n)), by = 'author')) %>% 
+        mutate(n = (n/s) * 100) %>% 
+        filter(has_allit == T) %>% 
+        ggplot(aes(x = author, y = n, fill = author)) +
+        geom_col() +
+        scale_fill_manual(values = c(HPL = 'blue4', EAP = 'red4', MWS = 'purple4')) +
+        labs(y = "fraction of sentences with alliterations") +
+        ggtitle(title) +
+        theme_bw()
+}
+
+pl1 <- get_allit_plot(get_alliterations(train, stop = T), title = 'without stop words')
+pl2 <- get_allit_plot(get_alliterations(train, stop = F), title = 'with stop words')
+
+grid.arrange(pl1, pl2, nrow = 1)
+```
+
+Лавкрафт незначительно опережает остальных в поэтичности речи.
 
 <!-- \begin{equation} -->
 <!--   \label{eq:1} -->
